@@ -1,4 +1,4 @@
-"""Reading and writing LabelMaps as .nii, .nrrd, or .mhd + .raw, segmentations, poly data as .vtp, and B-reps as .brep, and writing meshes."""
+"""Reading and writing LabelMaps as .nii, .nrrd, or .mhd + .raw, segmentations, poly data as .vtp, B-reps as .brep, and bone surfaces as .stl, and writing meshes."""
 
 import json
 from os import PathLike
@@ -9,6 +9,7 @@ import numpy as np
 import SimpleITK as sitk
 from loguru import logger
 from vtkmodules.vtkCommonDataModel import vtkPolyData
+from vtkmodules.vtkIOGeometry import vtkSTLReader, vtkSTLWriter
 from vtkmodules.vtkIOXML import vtkXMLPolyDataReader, vtkXMLPolyDataWriter
 
 from kneemesh.brep import BRep, gmsh_session
@@ -19,6 +20,7 @@ from kneemesh.vol import LABEL_MAP_PIXEL_IDS
 SUPPORTED_SUFFIXES = frozenset({".nii", ".nrrd", ".mhd"})
 POLY_DATA_SUFFIXES = frozenset({".vtp"})
 BREP_SUFFIXES = frozenset({".brep"})
+SURFACE_SUFFIXES = frozenset({".stl"})
 
 
 def read_label_map(path: str | PathLike[str]) -> sitk.Image:
@@ -154,12 +156,48 @@ def write_brep(brep: BRep, path: str | PathLike[str]) -> None:
     logger.debug("Wrote B-rep to {}", path)
 
 
+def read_surface(path: str | PathLike[str]) -> vtkPolyData:
+    """Read a triangulated surface, such as a bone's, from a .stl file, merging coincident points.
+
+    Raises:
+        ValueError: If the suffix is not .stl or the file holds no triangles.
+        FileNotFoundError: If the file does not exist.
+    """
+    path = _validated_path(path, SURFACE_SUFFIXES)
+    if not path.is_file():
+        raise FileNotFoundError(f"No such file: {path}")
+    reader = vtkSTLReader()
+    reader.SetFileName(str(path))
+    reader.MergingOn()
+    reader.Update()
+    surface = reader.GetOutput()
+    if not surface.GetNumberOfPolys():
+        raise ValueError(f"Not a triangulated surface: {path}")
+    return surface
+
+
+def write_surface(surface: vtkPolyData, path: str | PathLike[str]) -> None:
+    """Write a triangulated surface to a binary .stl file, overwriting any existing file.
+
+    Raises:
+        ValueError: If the suffix is not .stl.
+        OSError: If the file cannot be written.
+    """
+    path = _validated_path(path, SURFACE_SUFFIXES)
+    writer = vtkSTLWriter()
+    writer.SetFileName(str(path))
+    writer.SetInputData(surface)
+    writer.SetFileTypeToBinary()
+    if not writer.Write():
+        raise OSError(f"Could not write the surface to {path}")
+    logger.debug("Wrote surface to {}", path)
+
+
 def write_mesh(mesh: Mesh, path: str | PathLike[str]) -> None:
     """Write a mesh in the format gmsh infers from the extension, overwriting any existing file.
 
-    Volume formats include .msh, .vtk, .inp, .unv, .bdf, .med, .mesh, and
-    .su2. The mesh has only volume elements, so surface formats such as .stl
-    hold no elements.
+    Formats include .msh, .vtk, .inp, .unv, .bdf, .med, .mesh, and .su2, and
+    .stl for meshes of triangles.
 
     Raises:
         ValueError: If gmsh does not recognize the extension.
@@ -167,12 +205,13 @@ def write_mesh(mesh: Mesh, path: str | PathLike[str]) -> None:
     """
     path = Path(path)
     with gmsh_session():
-        volume = gmsh.model.addDiscreteEntity(3)
-        gmsh.model.mesh.addNodes(3, volume, np.arange(1, len(mesh.nodes) + 1).tolist(), mesh.nodes.ravel().tolist())
+        dimension = max((gmsh.model.mesh.getElementProperties(element_type)[1] for element_type in mesh.element_types.values()), default=3)
+        entity = gmsh.model.addDiscreteEntity(dimension)
+        gmsh.model.mesh.addNodes(dimension, entity, np.arange(1, len(mesh.nodes) + 1).tolist(), mesh.nodes.ravel().tolist())
         first_tag = 1
         for name, connectivity in mesh.elements.items():
             element_tags = np.arange(first_tag, first_tag + len(connectivity))
-            gmsh.model.mesh.addElementsByType(volume, mesh.element_types[name], element_tags.tolist(), (connectivity + 1).ravel().tolist())
+            gmsh.model.mesh.addElementsByType(entity, mesh.element_types[name], element_tags.tolist(), (connectivity + 1).ravel().tolist())
             first_tag += len(connectivity)
         try:
             gmsh.write(str(path))

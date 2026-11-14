@@ -12,12 +12,16 @@ from kneemesh.disk import (
     read_label_map,
     read_poly_data,
     read_segmentation,
+    read_surface,
     write_brep,
     write_label_map,
     write_mesh,
     write_poly_data,
     write_segmentation,
+    write_surface,
 )
+from kneemesh.geo.bone import surface_arrays
+from kneemesh.mesh.bone import surface_mesh
 from kneemesh.mesh.meniscus import hexahedral_mesh
 from kneemesh.segmentation import Segmentation
 from kneemesh.tet_meshing import tetrahedral_mesh
@@ -245,3 +249,44 @@ def test_reading_a_segmentation_needs_its_labels_file(tmp_path, meniscus_label):
 
     with pytest.raises(OSError):
         read_segmentation(tmp_path / "knee.nii")
+
+
+def test_surface_round_trip_keeps_points_and_triangles(tmp_path, bone_surface):
+    path = tmp_path / "bone.stl"
+
+    write_surface(bone_surface, path)
+    points, triangles = surface_arrays(read_surface(path))
+
+    original_points, original_triangles = surface_arrays(bone_surface)
+    assert len(points) == len(original_points)
+    assert len(triangles) == len(original_triangles)
+    # STL stores single precision.
+    assert np.allclose(np.sort(points, axis=0), np.sort(original_points, axis=0), atol=1e-4)
+
+
+@pytest.mark.parametrize("filename", ["bone.vtp", "bone.obj"])
+def test_surface_rejects_unsupported_format(tmp_path, bone_surface, filename):
+    with pytest.raises(ValueError, match="Unsupported file format"):
+        write_surface(bone_surface, tmp_path / filename)
+    with pytest.raises(ValueError, match="Unsupported file format"):
+        read_surface(tmp_path / filename)
+
+
+def test_read_surface_rejects_missing_or_empty_files(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        read_surface(tmp_path / "missing.stl")
+    (tmp_path / "empty.stl").write_text("solid empty\nendsolid empty\n")
+    with pytest.raises(ValueError, match="Not a triangulated surface"):
+        read_surface(tmp_path / "empty.stl")
+
+
+def test_write_mesh_writes_surface_elements(tmp_path, bone_surface):
+    mesh = surface_mesh(bone_surface, 3.0, quadrilaterals=True)
+    path = tmp_path / "mesh.msh"
+
+    write_mesh(mesh, path)
+
+    with gmsh_session():
+        gmsh.merge(str(path))
+        assert len(gmsh.model.mesh.getElementTypes(3)) == 0
+        assert len(gmsh.model.mesh.getElementsByType(3)[0]) == len(mesh.elements["Quadrilateral 4"])

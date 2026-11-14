@@ -2,9 +2,9 @@
 
 `kneemesh-assemble` combines single-label LabelMaps into one multilabel LabelMap. `kneemesh-brep` builds a B-rep of every structure in a segmentation, and `kneemesh-mesh` meshes each structure's B-rep. Each takes a JSON configuration, `--option value` overrides, or both, and `--help` lists every option and its default. Every option is a field of the command's model, {py:class}`~kneemesh.config.LabelMapAssembly`, {py:class}`~kneemesh.config.LabelMapBrep`, or {py:class}`~kneemesh.config.BrepMesh`, with underscores written as dashes. Settings for one kind of structure sit in a section, such as `meniscus`, and are given on the command line as `--meniscus.points-per-slice 10`.
 
-The structure names, keys of `labels`, `label_maps`, and `breps`, pick each structure's pipeline: `lateral_meniscus`, `medial_meniscus`, `patellar_cartilage`, `femoral_cartilage`, `lateral_tibial_cartilage`, `medial_tibial_cartilage`, `femur`, `tibia`, and `patella`. The menisci and the cartilage are implemented so far; naming any other structure fails before any work starts, except a bone named only for its cartilage.
+The structure names, keys of `labels`, `label_maps`, and `breps`, pick each structure's pipeline: `lateral_meniscus`, `medial_meniscus`, `patellar_cartilage`, `femoral_cartilage`, `lateral_tibial_cartilage`, `medial_tibial_cartilage`, `femur`, `tibia`, and `patella`. All are implemented. The bones' geometry is a triangulated surface rather than a B-rep; see [Bones](#bones).
 
-Each structure's output is written to `<output-directory>/<structure><output>`, where `--output` is a suffix. B-rep suffixes end in `.brep`, `.brep` by default. Mesh suffixes default to `_{element_type}.msh`, with `{element_type}` replaced by `--element-type`: `hex8`, `hex20`, `hex27`, `tet4` (the default), or `tet10`. gmsh infers the mesh format from the extension.
+Each structure's output is written to `<output-directory>/<structure><output>`, where `--output` is a suffix. B-rep suffixes end in `.brep`, `.brep` by default; bones' surfaces take `--bone.output`, `.stl` by default. Mesh suffixes default to `_{element_type}.msh`, with `{element_type}` replaced by `--element-type`: `hex8`, `hex20`, `hex27`, `tet4` (the default), or `tet10`, or for a bone by `--bone.element-type`. gmsh infers the mesh format from the extension.
 
 ```sh
 kneemesh-brep --label-map meniscus.nii --labels '{"medial_meniscus": 1}' --meniscus.cap planar
@@ -31,7 +31,7 @@ It writes `knee.nrrd` and its labels in `knee_labels.json` beside it, logging to
 - **A multilabel LabelMap** with `--label-map`, and `--labels` naming its values as JSON, such as `'{"lateral_meniscus": 2, "medial_meniscus": 3}'`. `--labels` is required, and values it does not name are ignored. An assembled LabelMap is read with `--label-map knee.nrrd --labels "$(cat knee_labels.json)"`.
 - **Single-label LabelMaps** with `--label-maps`, assembled within the run as `kneemesh-assemble` does, one file per structure by name, such as `'{"lateral_meniscus": "lateral.nii", "medial_meniscus": "medial.nii"}'`. Every nonzero voxel of a file is its structure. {py:func}`~kneemesh.segmentation.assemble_label_maps` resamples them onto one grid, in the first file's orientation, with the smallest voxel spacing along each axis and a background margin of `--padding` voxels. `--interpolator` chooses `label_gaussian` (the default) or `nearest_neighbor`. Where structures overlap after resampling, the one listed later wins. `--assembled-label-map knee.nrrd` also writes the assembled LabelMap and `knee_labels.json`, as `kneemesh-assemble` does. {py:func}`~kneemesh.disk.read_segmentation` reads them in Python.
 
-Every structure in the segmentation is built, so name only implemented structures for now. A cartilage needs the bone beneath it in the segmentation too: `patella` for `patellar_cartilage`, `femur` for `femoral_cartilage`, and `tibia` for either tibial cartilage. Bone B-reps are not implemented yet, so a bone named only for its cartilage is used to tell the cartilage's sides apart and is not built.
+Every structure in the segmentation is built. A cartilage needs the bone beneath it in the segmentation too: `patella` for `patellar_cartilage`, `femur` for `femoral_cartilage`, and `tibia` for either tibial cartilage. The bone tells the cartilage's sides apart, and its surface is built as well.
 
 ```json
 {
@@ -65,3 +65,22 @@ kneemesh-mesh --breps '{"femoral_cartilage": "femoral_cartilage_hex.brep"}' --el
 ```
 
 Tetrahedra default to `--femoral-cartilage.element-size` too, since the default from the oriented bounding box, about 30 mm across for the wrapped cartilage, gives nearly flat tetrahedra.
+
+## Bones
+
+The femur, tibia, and patella are not meshed with hexahedra, and their geometry is not a B-rep. `kneemesh-brep` writes each bone's closed, triangulated surface as `.stl`:
+
+1. {py:func}`~kneemesh.geo.bone.bone_mask` fills the label's cavities. Where the scan cuts a shaft off, as it does the femur's and tibia's, `--bone.shaft-cut-fraction` removes that fraction of the bone's length along the shaft from the cut end, square in the voxel map, to make the mesh smaller; 0, the default, keeps the shaft as scanned. A shaft is cut off where the label's last slice along an image axis is a whole cross-section, nearly the same as the slices 2 mm inside it.
+2. The surface is the isocontour of the mask's smoothed distance field, as for the other structures, smoothed by a windowed sinc filter with non-manifold and feature-edge smoothing off and coordinates normalized. Smoothing rounds the flat end of a cut shaft.
+3. {py:func}`~kneemesh.geo.bone.decimate_surface` reduces the triangles to `--bone.triangle-size`, 1 by default, which moves the real bones' surfaces by at most 0.02. gmsh took minutes to reparametrize the real femur's 340,000 triangles.
+
+`kneemesh-mesh` meshes a bone given its `.stl` in `--breps`. gmsh splits the surface into patches it can map to a plane and meshes them ({py:mod}`kneemesh.mesh.bone`). `--bone.element-type` chooses the elements, separately from `--element-type`:
+
+- `tri3` (the default) or `tri6` triangles, or `quad4`, `quad8`, or `quad9` quadrilaterals, on the surface, about `--bone.element-size` across, 2 by default. Quadrilateral meshes hold quadrilaterals only. The mesh is smoothed across the seams between gmsh's patches, and every node, second-order ones included, lies on the surface.
+- `tet4` or `tet10` tetrahedra through the volume, `--bone.cortical-element-size` across, 1 by default, within `--bone.cortical-distance` of the surface, 3 by default, where the cortical bone lies. Deeper, in the cancellous bone, their edges grow by `--bone.cancellous-grad` per unit of depth, 0.5 by default, up to `--bone.max-size`, 4 by default; a smaller grad makes a smoother transition and more elements.
+
+```sh
+kneemesh-brep --label-maps '{"femur": "femur.nii"}' --bone.shaft-cut-fraction 0.3
+kneemesh-mesh --breps '{"femur": "femur.stl"}' --bone.element-type quad4
+kneemesh-mesh --breps '{"femur": "femur.stl"}' --bone.element-type tet10 --bone.cortical-distance 2
+```

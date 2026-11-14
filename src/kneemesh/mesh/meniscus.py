@@ -3,7 +3,7 @@
 import gmsh
 
 from kneemesh.brep import BRep, gmsh_session
-from kneemesh.tet_meshing import Mesh, gmsh_options, import_solid, require_element_order, volume_mesh
+from kneemesh.tet_meshing import Mesh, gmsh_mesh, gmsh_options, import_solid, require_element_order
 
 
 def hexahedral_mesh(
@@ -60,4 +60,4 @@ def hexahedral_mesh(
         gmsh.model.add_physical_group(3, volumes, name="solid")
 
         gmsh.model.mesh.generate(3)
-        return volume_mesh()
+        return gmsh_mesh()

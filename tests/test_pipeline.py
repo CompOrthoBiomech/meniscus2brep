@@ -8,8 +8,8 @@ from loguru import logger
 
 from kneemesh.brep import gmsh_session
 from kneemesh.config import STRUCTURES, BrepMesh, LabelMapAssembly, LabelMapBrep, MeniscusBrep, MeniscusMesh
-from kneemesh.disk import read_brep, read_segmentation, write_brep, write_label_map
-from kneemesh.pipeline import assemble_main, brep_main, configure, mesh_main
+from kneemesh.disk import read_brep, read_segmentation, read_surface, write_brep, write_label_map
+from kneemesh.pipeline import _BREP_BUILDERS, _MESHERS, assemble_main, brep_main, configure, mesh_main
 from kneemesh.tet_meshing import Algorithm2D, Algorithm3D
 from kneemesh.vol import signed_distance_field
 
@@ -291,29 +291,26 @@ def test_pipeline_disables_package_logging_when_done(meniscus_label):
     assert messages == []
 
 
-IMPLEMENTED = (
-    "lateral_meniscus",
-    "medial_meniscus",
-    "lateral_tibial_cartilage",
-    "medial_tibial_cartilage",
-    "patellar_cartilage",
-    "femoral_cartilage",
-)
+def test_every_structure_has_a_pipeline():
+    assert set(_BREP_BUILDERS) == set(STRUCTURES)
+    assert set(_MESHERS) == set(STRUCTURES)
 
 
-@pytest.mark.parametrize("structure", [structure for structure in STRUCTURES if structure not in IMPLEMENTED])
-def test_unimplemented_structures_report_an_error_before_any_work(in_tmp_path, structure, capsys):
-    labels = {"femur": 1, "tibia": 2, "patella": 3, structure: 4}
-    assert brep_main(["--label-map", "missing.nii", "--labels", json.dumps(labels)]) == 1
-    assert mesh_main(["--breps", json.dumps({"medial_meniscus": "missing.brep", structure: "missing.brep"})]) == 1
+def test_pipelines_build_and_mesh_a_bone(in_tmp_path, bone_label, capsys):
+    write_label_map(bone_label, in_tmp_path / "bone.nii")
+    labels = json.dumps({"femur": 1})
 
-    errors = [line for line in capsys.readouterr().err.splitlines() if line.startswith("ERROR")]
-    assert len(errors) == 2
-    assert "B-rep generation is not implemented for" in errors[0] and structure in errors[0]
-    assert errors[1].endswith(f"Meshing is not implemented for {structure}")
-    stderr = "\n".join(errors)
-    assert "No such file" not in stderr
-    assert not list(in_tmp_path.glob("*.brep")) and not list(in_tmp_path.glob("*.msh"))
+    assert brep_main(["--label-map", "bone.nii", "--labels", labels, "--bone.shaft-cut-fraction", "0.2", "--bone.output", "_surface.stl"]) == 0
+    breps = json.dumps({"femur": "femur_surface.stl"})
+    assert mesh_main(["--breps", breps, "--bone.element-type", "quad8", "--output", "_{element_type}.vtk"]) == 0
+    assert mesh_main(["--breps", breps, "--element-type", "hex8", "--bone.element-type", "tet10", "--bone.max-size", "3"]) == 0
+
+    assert read_surface(in_tmp_path / "femur_surface.stl").GetNumberOfPolys() > 0
+    assert sorted(path.name for path in in_tmp_path.glob("femur_*.*sh")) == ["femur_tet10.msh"]
+    assert (in_tmp_path / "femur_quad8.vtk").stat().st_size > 0
+    stderr = capsys.readouterr().err
+    assert "cutting off 0.2 of each shaft" in stderr
+    assert "Meshing with tet10 elements of size 1.0 within 3.0 of the surface" in stderr
 
 
 def test_pipeline_reads_named_labels_from_a_multilabel_image(in_tmp_path, meniscus_label):
@@ -421,11 +418,12 @@ def test_pipeline_builds_and_meshes_cartilage_against_its_bone(in_tmp_path, cart
     assert mesh_main(["--breps", json.dumps({"lateral_tibial_cartilage": "lateral_tibial_cartilage_tet.brep"})]) == 0
 
     stderr = capsys.readouterr().err
-    assert "Using tibia only to orient its cartilage" in stderr
     assert "Optimized minimum scaled Jacobian" in stderr and "maximum Frobenius aspect ratio" in stderr
     assert sorted(path.name for path in in_tmp_path.glob("*.msh")) == ["lateral_tibial_cartilage_hex8.msh", "lateral_tibial_cartilage_tet4.msh"]
     assert (in_tmp_path / "lateral_tibial_cartilage_partition.brep").exists()
+    # The bone is built as a surface too.
     assert not list(in_tmp_path.glob("tibia*.brep"))
+    assert (in_tmp_path / "tibia.stl").stat().st_size > 0
 
 
 def test_pipeline_builds_and_meshes_femoral_cartilage_against_the_femur(in_tmp_path, femoral_segmentation, capsys):
@@ -440,6 +438,5 @@ def test_pipeline_builds_and_meshes_femoral_cartilage_against_the_femur(in_tmp_p
     assert mesh_main(["--breps", json.dumps({"femoral_cartilage": "femoral_cartilage_tet.brep"}), "--femoral-cartilage.element-size", "4"]) == 0
 
     stderr = capsys.readouterr().err
-    assert "Using femur only to orient its cartilage" in stderr
     assert "Optimized minimum scaled Jacobian" in stderr
     assert sorted(path.name for path in in_tmp_path.glob("*.msh")) == ["femoral_cartilage_hex8.msh", "femoral_cartilage_tet4.msh"]

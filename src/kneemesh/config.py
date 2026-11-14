@@ -8,13 +8,21 @@ from typing import Annotated, Any, ClassVar, Literal, Self, get_args
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 from kneemesh.cartilage import DEFAULT_SIDE_COSINE
-from kneemesh.disk import BREP_SUFFIXES
+from kneemesh.disk import BREP_SUFFIXES, SURFACE_SUFFIXES
+from kneemesh.geo.bone import DEFAULT_TRIANGLE_SIZE
 from kneemesh.geo.sheet import (
     DEFAULT_HOLE_THICKNESS,
     DEFAULT_MIN_THICKNESS_HEXAHEDRAL,
     DEFAULT_MIN_THICKNESS_TETRAHEDRAL,
     DEFAULT_PERIMETER_RADIUS_HEXAHEDRAL,
     DEFAULT_PERIMETER_RADIUS_TETRAHEDRAL,
+)
+from kneemesh.mesh.bone import (
+    DEFAULT_BONE_ELEMENT_SIZE,
+    DEFAULT_BONE_MAX_SIZE,
+    DEFAULT_CANCELLOUS_GRAD,
+    DEFAULT_CORTICAL_DISTANCE,
+    DEFAULT_CORTICAL_ELEMENT_SIZE,
 )
 from kneemesh.mesh.sheet import QuadAlgorithm
 from kneemesh.mesh_optimization import (
@@ -78,8 +86,14 @@ BONES: dict[Structure, Structure] = {
 }
 """The bone under each cartilage, which must be in the same segmentation to orient it."""
 
+BONE_STRUCTURES: tuple[Structure, ...] = ("femur", "tibia", "patella")
+"""The bones, whose geometry is a triangulated surface rather than a B-rep, meshed with their own element types."""
+
 ElementType = Literal["hex8", "hex20", "hex27", "tet4", "tet10"]
 """Element shape and node count: 8-node, 20-node serendipity, or 27-node hexahedra, or 4- or 10-node tetrahedra."""
+
+BoneElementType = Literal["tri3", "tri6", "quad4", "quad8", "quad9", "tet4", "tet10"]
+"""A bone's element shape and node count: 3- or 6-node triangles or 4-, 8-, or 9-node quadrilaterals on its surface, or 4- or 10-node tetrahedra."""
 
 OptionalFloat = Annotated[float | None, BeforeValidator(_none_from_text)]
 OptionalPath = Annotated[Path | None, BeforeValidator(_none_from_text)]
@@ -241,6 +255,37 @@ class FemoralCartilageBrep(CartilageBrep):
     """
 
 
+class BoneBrep(SurfaceBrep):
+    """Settings for building the femur's, tibia's, and patella's surfaces, with the defaults of each step.
+
+    A bone's geometry is not a B-rep but its closed, triangulated surface,
+    written as .stl: the isocontour of its label with cavities filled,
+    smoothed with non-manifold smoothing off, and decimated. gmsh
+    reparametrizes it when meshing.
+    """
+
+    shaft_cut_fraction: float = Field(
+        default=0.0,
+        ge=0,
+        lt=1,
+        description="Fraction of the bone's length along each shaft the scan cuts off, such as the femur's and tibia's, to remove "
+        + "from that end, cut square in the voxel map, making the mesh smaller. 0 keeps the shaft as scanned",
+    )
+    triangle_size: float = Field(
+        default=DEFAULT_TRIANGLE_SIZE,
+        gt=0,
+        description="Edge length the surface's triangles are decimated to, in physical units. At 1 the real bones move at most 0.02",
+    )
+    output: str = Field(
+        default=".stl", description="Suffix of each bone's surface file, appended to its name, such as _surface.stl for femur_surface.stl"
+    )
+
+    @model_validator(mode="after")
+    def _check_output(self) -> Self:
+        _check_suffix(self.output, SURFACE_SUFFIXES)
+        return self
+
+
 class StructureMesh(BaseConfig):
     """Settings shared by every structure for tetrahedral meshing and for optimizing hexahedral meshes."""
 
@@ -363,7 +408,8 @@ class LabelMapBrep(BaseConfig):
     assembled onto one grid. Give one or the other. Each structure named in
     labels or label_maps is built by its own pipeline, with the settings of
     its section such as meniscus, and written to
-    <output_directory>/<structure><output>.
+    <output_directory>/<structure><output>. Bones, including those named only
+    to orient their cartilage, are written as surfaces with bone.output instead.
     """
 
     label_map: OptionalPath = Field(default=None, description="Multilabel LabelMap to read: .nii, .nrrd, or .mhd")
@@ -388,6 +434,7 @@ class LabelMapBrep(BaseConfig):
         default_factory=CartilageBrep, description="Settings for the lateral and medial tibial and the patellar cartilage"
     )
     femoral_cartilage: FemoralCartilageBrep = Field(default_factory=FemoralCartilageBrep, description="Settings for the femoral cartilage")
+    bone: BoneBrep = Field(default_factory=BoneBrep, description="Settings for the femur, tibia, and patella, whose output is a surface")
 
     @model_validator(mode="after")
     def _check_sources(self) -> Self:
@@ -415,8 +462,78 @@ class LabelMapBrep(BaseConfig):
         return tuple(self.label_maps) if self.label_maps is not None else ()
 
     def output_path(self, structure: Structure) -> Path:
-        """The B-rep file to write for structure."""
-        return self.output_directory / f"{structure}{self.output}"
+        """The B-rep file to write for structure, or the surface file for a bone."""
+        return self.output_directory / f"{structure}{self.bone.output if structure in BONE_STRUCTURES else self.output}"
+
+
+class BoneMesh(BaseConfig):
+    """Settings for meshing the femur's, tibia's, and patella's surfaces, which gmsh reparametrizes.
+
+    Bones are meshed on their surface with triangles or quadrilaterals, or
+    through their volume with tetrahedra, by their own element_type; the
+    mesh's element_type does not apply to them. Bones are not meshed with hexahedra.
+    """
+
+    element_type: BoneElementType = Field(
+        default="tri3",
+        description="Element shape and node count: tri3 or tri6 triangles or quad4, quad8, or quad9 quadrilaterals on the surface, "
+        + "or tet4 or tet10 tetrahedra through the volume",
+    )
+    element_size: float = Field(
+        default=DEFAULT_BONE_ELEMENT_SIZE,
+        gt=0,
+        description="Target edge length of surface elements, in physical units; tetrahedra use the cortical sizes",
+    )
+    cortical_element_size: float = Field(
+        default=DEFAULT_CORTICAL_ELEMENT_SIZE,
+        gt=0,
+        description="Edge length of tetrahedra within cortical_distance of the surface, the surface's triangles included, in physical units",
+    )
+    cortical_distance: float = Field(
+        default=DEFAULT_CORTICAL_DISTANCE, ge=0, description="Depth below the surface of the shell of cortical_element_size tetrahedra"
+    )
+    cancellous_grad: float = Field(
+        default=DEFAULT_CANCELLOUS_GRAD,
+        gt=0,
+        description="Growth of the tetrahedra's edge length per unit of depth beyond cortical_distance, up to max_size; "
+        + "smaller makes a smoother transition",
+    )
+    max_size: float = Field(default=DEFAULT_BONE_MAX_SIZE, gt=0, description="Largest edge length of tetrahedra, deep in the cancellous bone")
+    algorithm_2d: Algorithm2D = Field(default=Algorithm2D.FRONTAL_DELAUNAY, description="gmsh surface algorithm for triangles")
+    algorithm_3d: Algorithm3D = Field(default=Algorithm3D.DELAUNAY, description="gmsh volume algorithm for tetrahedra")
+
+    @model_validator(mode="after")
+    def _check_sizes(self) -> Self:
+        if self.max_size < self.cortical_element_size:
+            raise ValueError(f"max_size {self.max_size} must be at least cortical_element_size {self.cortical_element_size}")
+        return self
+
+    @property
+    def element_shape(self) -> Literal["triangle", "quadrilateral", "tetrahedral"]:
+        """The shape of element_type."""
+        return BONE_ELEMENT_TYPES[self.element_type][0]
+
+    @property
+    def element_order(self) -> int:
+        """The polynomial order of element_type."""
+        return BONE_ELEMENT_TYPES[self.element_type][1]
+
+    @property
+    def second_order_incomplete(self) -> bool:
+        """Whether element_type omits the middle node of second-order quadrilaterals."""
+        return BONE_ELEMENT_TYPES[self.element_type][2]
+
+
+# Each bone element type's shape, polynomial order, and whether second-order quadrilaterals omit their middle node.
+BONE_ELEMENT_TYPES: dict[BoneElementType, tuple[Literal["triangle", "quadrilateral", "tetrahedral"], int, bool]] = {
+    "tri3": ("triangle", 1, False),
+    "tri6": ("triangle", 2, False),
+    "quad4": ("quadrilateral", 1, False),
+    "quad8": ("quadrilateral", 2, True),
+    "quad9": ("quadrilateral", 2, False),
+    "tet4": ("tetrahedral", 1, False),
+    "tet10": ("tetrahedral", 2, False),
+}
 
 
 # Each element type's shape, polynomial order, and whether high-order elements omit face and interior nodes.
@@ -434,20 +551,23 @@ class BrepMesh(BaseConfig):
 
     Each structure in breps is meshed by its own pipeline, with the settings
     of its section such as meniscus, and written to
-    <output_directory>/<structure><output>.
+    <output_directory>/<structure><output>. Bones are meshed from their
+    surfaces with bone.element_type.
     """
 
     breps: StructurePaths = Field(
         default=None,
-        description='B-rep file of each structure to mesh, by structure name, as JSON such as {"medial_meniscus": "medial_meniscus.brep"}',
+        description="B-rep file of each structure to mesh, or .stl surface of each bone, by structure name, as JSON such as "
+        + '{"medial_meniscus": "medial_meniscus.brep", "tibia": "tibia.stl"}',
     )
     element_type: ElementType = Field(
-        default="tet4", description="Element shape and node count: hex8, hex20, or hex27 hexahedra, or tet4 or tet10 tetrahedra"
+        default="tet4",
+        description="Element shape and node count: hex8, hex20, or hex27 hexahedra, or tet4 or tet10 tetrahedra. Bones use bone.element_type",
     )
     output: str = Field(
         default="_{element_type}.msh",
-        description="Suffix of each mesh file, appended to its structure's name, where {element_type} is replaced by the element type. "
-        + "gmsh infers the format from the extension",
+        description="Suffix of each mesh file, appended to its structure's name, where {element_type} is replaced by the element type, "
+        + "a bone's own for bones. gmsh infers the format from the extension",
     )
     output_directory: Path = _output_directory_field()
     meniscus: MeniscusMesh = Field(default_factory=MeniscusMesh, description="Settings for the lateral and medial menisci")
@@ -455,6 +575,7 @@ class BrepMesh(BaseConfig):
         default_factory=CartilageMesh, description="Settings for the lateral and medial tibial and the patellar cartilage"
     )
     femoral_cartilage: FemoralCartilageMesh = Field(default_factory=FemoralCartilageMesh, description="Settings for the femoral cartilage")
+    bone: BoneMesh = Field(default_factory=BoneMesh, description="Settings for the femur, tibia, and patella")
 
     @model_validator(mode="after")
     def _check_mesh(self) -> Self:
@@ -490,8 +611,9 @@ class BrepMesh(BaseConfig):
         return self.output.format(element_type=self.element_type)
 
     def output_path(self, structure: Structure) -> Path:
-        """The mesh file to write for structure."""
-        return self.output_directory / f"{structure}{self.output_suffix}"
+        """The mesh file to write for structure, named with the bone's element type for a bone."""
+        suffix = self.output.format(element_type=self.bone.element_type) if structure in BONE_STRUCTURES else self.output_suffix
+        return self.output_directory / f"{structure}{suffix}"
 
     def partition_path(self, structure: Structure) -> Path:
         """The B-rep of a sheet's hexahedral partition to write for structure, with save_partition."""

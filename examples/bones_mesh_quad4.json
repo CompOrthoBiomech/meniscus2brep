@@ -1,0 +1,13 @@
+{
+  "breps": {
+    "femur": "examples/femur.stl",
+    "tibia": "examples/tibia.stl",
+    "patella": "examples/patella.stl"
+  },
+  "output": "_{element_type}.vtk",
+  "output_directory": "examples",
+  "bone": {
+    "element_type": "quad4",
+    "element_size": 2.0
+  }
+}

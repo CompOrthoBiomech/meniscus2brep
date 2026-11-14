@@ -1,6 +1,6 @@
 # API reference
 
-Modules at the package root apply to every structure. The `geo` and `mesh` subpackages hold one module per structure.
+Modules at the package root apply to every structure. The `geo` and `mesh` subpackages hold one module per structure or strategy.
 
 ```{eval-rst}
 .. automodule:: kneemesh.vol
@@ -44,16 +44,10 @@ Modules at the package root apply to every structure. The `geo` and `mesh` subpa
 .. automodule:: kneemesh.geo.femur
 ```
 
-## Planned structures
+## Bones
 
 ```{eval-rst}
-.. automodule:: kneemesh.geo.tibia
+.. automodule:: kneemesh.geo.bone
 
-.. automodule:: kneemesh.geo.patella
-
-.. automodule:: kneemesh.mesh.femur
-
-.. automodule:: kneemesh.mesh.tibia
-
-.. automodule:: kneemesh.mesh.patella
+.. automodule:: kneemesh.mesh.bone
 ```

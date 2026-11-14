@@ -132,13 +132,33 @@ def _quadrangulate(top: int, bottom: int, size: float, order: int, algorithm: Qu
     """Mesh the top side with quadrilaterals and find each node's column to the bottom side."""
     gmsh.model.setVisibility(gmsh.model.getEntities(), False)
     gmsh.model.setVisibility([(2, top)], True, recursive=True)
-    base = {
-        "Mesh.MeshOnlyVisible": 1,
-        "Mesh.RecombineAll": 1,
-        "Mesh.MeshSizeFromCurvature": 0,
-        "Mesh.MeshSizeExtendFromBoundary": 0,
-        "Mesh.MeshSizeFromPoints": 0,
-    }
+    with gmsh_options({"Mesh.MeshOnlyVisible": 1}):
+        quadrangulate([top], size, algorithm, "the sheet's side")
+    if order == 2:
+        with gmsh_options({"Mesh.SecondOrderIncomplete": 0}):
+            gmsh.model.mesh.setOrder(2)
+    return _columns(top, bottom, order)
+
+
+def quadrangulate(surfaces: list[int], size: float, algorithm: QuadAlgorithm, name: str = "the surface") -> None:
+    """Mesh the current model's surfaces with quadrilaterals only, about size across.
+
+    If gmsh leaves triangles on any of surfaces, which Frontal-Delaunay
+    recombination occasionally does, the size is changed by 2, 4, then 6%
+    each way in turn, and as a last resort a mesh at twice the size is
+    subdivided, each triangle into three quadrilaterals and each
+    quadrilateral into four. Also used for the bones' surfaces (mesh.bone).
+
+    Args:
+        surfaces: Tags of the surfaces that must hold quadrilaterals only.
+        size: Target length of the edges.
+        algorithm: gmsh's algorithm for the quadrilaterals.
+        name: What the surfaces are, for messages.
+
+    Raises:
+        ValueError: If no mesh of quadrilaterals only could be made.
+    """
+    base = {"Mesh.RecombineAll": 1, "Mesh.MeshSizeFromCurvature": 0, "Mesh.MeshSizeExtendFromBoundary": 0, "Mesh.MeshSizeFromPoints": 0}
     attempts = [(_GMSH_ALGORITHMS[algorithm], size * (1 + change), False) for change in _SIZE_RETRIES]
     attempts.append((_GMSH_ALGORITHMS["frontal_delaunay"], 2 * size, True))
     for number, attempt_size, subdivide in attempts:
@@ -151,18 +171,18 @@ def _quadrangulate(top: int, bottom: int, size: float, order: int, algorithm: Qu
             gmsh.model.mesh.generate(2)
             if number == _GMSH_ALGORITHMS["frontal_delaunay"]:
                 gmsh.model.mesh.optimize("Laplace2D", niter=_SMOOTHING_SWEEPS)
-        triangles = sum(len(tags) for element_type, tags in zip(*gmsh.model.mesh.getElements(2, top)[:2], strict=True) if element_type != 3)
+        triangles = sum(
+            len(tags)
+            for surface in surfaces
+            for element_type, tags in zip(*gmsh.model.mesh.getElements(2, surface)[:2], strict=True)
+            if element_type not in _QUADRANGLE_TYPES.values()
+        )
         if not triangles:
             if attempt_size != size or number != _GMSH_ALGORITHMS[algorithm]:
-                logger.warning("Meshed the sheet's side with quadrilaterals only at size {:.4g}{}", attempt_size, ", subdivided" if subdivide else "")
-            break
+                logger.warning("Meshed {} with quadrilaterals only at size {:.4g}{}", name, attempt_size, ", subdivided" if subdivide else "")
+            return
         logger.debug("gmsh left {} triangles at size {:.4g}", triangles, attempt_size)
-    else:
-        raise ValueError("gmsh could not mesh the sheet's side with quadrilaterals only")
-    if order == 2:
-        with gmsh_options({"Mesh.SecondOrderIncomplete": 0}):
-            gmsh.model.mesh.setOrder(2)
-    return _columns(top, bottom, order)
+    raise ValueError(f"gmsh could not mesh {name} with quadrilaterals only")
 
 
 def _columns(top: int, bottom: int, order: int) -> _Side:

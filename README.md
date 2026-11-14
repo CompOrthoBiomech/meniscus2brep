@@ -4,7 +4,7 @@
 [![Coverage](https://img.shields.io/endpoint?url=https://comporthobiomech.github.io/kneemesh/coverage.json)](https://github.com/CompOrthoBiomech/kneemesh/actions/workflows/release.yml)
 [![Docs](https://img.shields.io/badge/docs-gh--pages-blue)](https://comporthobiomech.github.io/kneemesh/)
 
-Generate B-rep geometry of knee structures from a segmentation LabelMap, and mesh it with high-quality elements. The menisci and the lateral and medial tibial, patellar, and femoral cartilage are supported now; the bones are planned. For the meniscus:
+Generate B-rep geometry of knee structures from a segmentation LabelMap, and mesh it with high-quality elements. The menisci, the lateral and medial tibial, patellar, and femoral cartilage, and the femur, tibia, and patella are supported. For the meniscus:
 
 - **B-rep from segmentation labels.** Reads a LabelMap (`.nii`, `.nrrd`, or `.mhd`), fits a centerline through the labeled meniscus, slices its smoothed surface into cross-section contours, and lofts them into a solid B-spline B-rep (`.brep`) with planar or smooth end caps.
 - **Tetrahedral meshing** with linear 4-node or quadratic 10-node tetrahedra.
@@ -15,6 +15,12 @@ For the tibial, patellar, and femoral cartilage:
 - **B-rep from segmentation labels.** Tells the cartilage's articular side from the side against its bone, which must be in the segmentation, and fits both as heights over a plane, or for the femoral cartilage a cylinder, within a smoothed perimeter. Thin regions are thickened on the bone side, and for tetrahedra, the thinnest regions and gaps in the label become holes.
 - **Tetrahedral meshing** as for the meniscus.
 - **Hexahedral meshing** of the same solid: one side is meshed with quadrilaterals of about `--cartilage.element-size`, and hexahedra stack along straight columns to the other side. Optional node optimization (`--cartilage.optimize true`) untangles any inverted elements and weighs the elements' Frobenius aspect ratios along with their scaled Jacobians, keeping the worst under about 3.5 on the real test cartilage.
+
+For the femur, tibia, and patella:
+
+- **Surface from segmentation labels.** Fills the label's cavities, optionally cuts the shafts the scan cuts off shorter (`--bone.shaft-cut-fraction`), and writes the smoothed, decimated surface as `.stl`; gmsh reparametrizes it for meshing.
+- **Surface meshing** with 3- or 6-node triangles or 4-, 8-, or 9-node quadrilaterals (`--bone.element-type`, `tri3` by default).
+- **Tetrahedral meshing** with 4- or 10-node tetrahedra, finest in the cortical shell (`--bone.cortical-element-size` within `--bone.cortical-distance` of the surface) and growing by `--bone.cancellous-grad` per unit of depth up to `--bone.max-size`.
 
 Meshes are written in any format gmsh infers from the file extension, such as `.msh`, `.vtk`, or `.inp`.
 

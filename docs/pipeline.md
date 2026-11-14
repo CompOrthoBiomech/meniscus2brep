@@ -21,9 +21,17 @@ The femoral cartilage takes the same steps over a cylinder instead of a plane:
 1. {py:func}`~kneemesh.geo.femur.fit_femoral_sheet` fits a {py:class}`~kneemesh.geo.sheet.CylinderFrame` to the side against the femur, along the direction its surface normals vary least, and fits both sides as distances from that axis over the cylinder unrolled. The unrolled domain is a U.
 2. {py:func}`~kneemesh.geo.sheet.sheet_to_brep` builds its solid as for the other cartilage.
 
-The bone under each cartilage must be in the segmentation. It is used only to tell the cartilage's sides apart; bone B-reps are not implemented yet, so the bone is not built.
+The bone under each cartilage must be in the segmentation. It tells the cartilage's sides apart, and its own surface is built too.
 
 Both sides' surfaces take the domain coordinates as their parameters, so a point of one side and the point of the other at the same parameters lie on one straight column through the sheet, and the walls are made of such columns. {py:func}`kneemesh.mesh.sheet.hexahedral_mesh` relies on this to partition the sheet when it meshes it: it meshes one side with quadrilaterals by gmsh's Frontal-Delaunay algorithm, or its quasi-structured one, which follows a cross field aligned with the boundary, and runs each node's column to the other side, stacking hexahedra along the columns. {py:func}`kneemesh.mesh.sheet.sheet_partition_brep` builds the blocks the quadrilaterals' irregular nodes divide the sheet into, as a B-rep of one volume per block.
+
+For the femur, tibia, and patella, {py:func}`kneemesh.pipeline.run_brep` writes a closed, triangulated surface rather than a B-rep:
+
+1. {py:func}`~kneemesh.geo.bone.bone_mask` fills the label's cavities, and cuts shafts the scan cuts off ({py:func}`~kneemesh.geo.bone.find_shaft_ends`) shorter by `shaft_cut_fraction`, in the voxel map.
+2. {py:func}`~kneemesh.vol.signed_distance_field`, {py:func}`~kneemesh.vol.extract_isocontour`, and {py:func}`~kneemesh.vol.smooth_isocontour` extract its smoothed surface, with non-manifold smoothing off.
+3. {py:func}`~kneemesh.geo.bone.decimate_surface` reduces the surface to triangles about `triangle_size` across.
+
+{py:func}`kneemesh.mesh.bone.surface_mesh` and {py:func}`kneemesh.mesh.bone.tetrahedral_mesh` load the surface into gmsh, which splits it into patches it can map to a plane and builds those maps, then mesh it with triangles or quadrilaterals, or the solid it encloses with tetrahedra graded from the cortical shell inward.
 
 ## Distance field smoothing
 

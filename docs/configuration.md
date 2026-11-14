@@ -15,7 +15,7 @@ Each pipeline reads one of these models from JSON with {py:meth}`~kneemesh.confi
 
 ## Shared section settings
 
-Every structure's B-rep section extends {py:class}`~kneemesh.config.SurfaceBrep`, and every mesh section extends {py:class}`~kneemesh.config.StructureMesh`.
+Every structure's B-rep section extends {py:class}`~kneemesh.config.SurfaceBrep`, and every mesh section but the bones' extends {py:class}`~kneemesh.config.StructureMesh`.
 
 ```{eval-rst}
 .. autopydantic_model:: kneemesh.config.SurfaceBrep
@@ -58,5 +58,17 @@ The `femoral_cartilage` sections apply to `femoral_cartilage`. Its B-rep setting
    :noindex:
 
 .. autopydantic_model:: kneemesh.config.FemoralCartilageMesh
+   :noindex:
+```
+
+## Bones
+
+The `bone` sections apply to `femur`, `tibia`, and `patella`. A bone's geometry is its closed, triangulated surface, written as `.stl`, rather than a B-rep, and it is meshed with its own `element_type`: triangles or quadrilaterals on its surface, or tetrahedra, never hexahedra.
+
+```{eval-rst}
+.. autopydantic_model:: kneemesh.config.BoneBrep
+   :noindex:
+
+.. autopydantic_model:: kneemesh.config.BoneMesh
    :noindex:
 ```

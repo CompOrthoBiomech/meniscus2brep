@@ -6,6 +6,8 @@ import pytest
 from kneemesh.config import (
     STRUCTURES,
     BaseConfig,
+    BoneBrep,
+    BoneMesh,
     BrepMesh,
     CartilageBrep,
     CartilageMesh,
@@ -120,8 +122,8 @@ def test_mesh_output_defaults_to_the_element_type(element_type, shape, order, in
 
 
 def test_mesh_output_suffix_may_omit_or_reuse_the_element_type():
-    assert BrepMesh(output=".vtk").output_path("tibia") == Path("tibia.vtk")
-    assert BrepMesh(element_type="hex27", output="_{element_type}.inp").output_path("femur") == Path("femur_hex27.inp")
+    assert BrepMesh(output=".vtk").output_path("medial_meniscus") == Path("medial_meniscus.vtk")
+    assert BrepMesh(element_type="hex27", output="_{element_type}.inp").output_path("lateral_meniscus") == Path("lateral_meniscus_hex27.inp")
 
 
 @pytest.mark.parametrize(("output", "message"), [("_{order}.msh", "only the {element_type}"), ("_mesh", "file extension"), ("_{", "placeholder")])
@@ -233,3 +235,60 @@ def test_cartilage_hexahedra_settings():
     with pytest.raises(pydantic.ValidationError, match="only to hexahedral"):
         BrepMesh(cartilage=CartilageMesh(save_partition=True))
     assert BrepMesh(element_type="hex8").partition_path("patellar_cartilage") == Path("patellar_cartilage_partition.brep")
+
+
+def test_bones_are_written_as_surfaces():
+    config = LabelMapBrep(labels={"tibia": 1, "lateral_tibial_cartilage": 2}, output="_tet.brep", bone=BoneBrep(output="_bone.stl"))
+
+    assert config.output_path("tibia") == Path("tibia_bone.stl")
+    assert config.output_path("lateral_tibial_cartilage") == Path("lateral_tibial_cartilage_tet.brep")
+    assert LabelMapBrep().output_path("patella") == Path("patella.stl")
+    with pytest.raises(pydantic.ValidationError, match=".stl"):
+        BoneBrep(output=".brep")
+
+
+def test_bone_surface_settings():
+    config = BoneBrep()
+
+    assert (config.shaft_cut_fraction, config.triangle_size) == (0.0, 1.0)
+    for values in ({"shaft_cut_fraction": 1.0}, {"shaft_cut_fraction": -0.1}, {"triangle_size": 0.0}):
+        with pytest.raises(pydantic.ValidationError):
+            BoneBrep.model_validate(values)
+
+
+@pytest.mark.parametrize(
+    ("element_type", "shape", "order", "incomplete"),
+    [
+        ("tri3", "triangle", 1, False),
+        ("tri6", "triangle", 2, False),
+        ("quad4", "quadrilateral", 1, False),
+        ("quad8", "quadrilateral", 2, True),
+        ("quad9", "quadrilateral", 2, False),
+        ("tet4", "tetrahedral", 1, False),
+        ("tet10", "tetrahedral", 2, False),
+    ],
+)
+def test_bones_mesh_with_their_own_element_type(element_type, shape, order, incomplete):
+    config = BrepMesh(element_type="hex8", bone=BoneMesh(element_type=element_type))
+
+    assert (config.bone.element_shape, config.bone.element_order, config.bone.second_order_incomplete) == (shape, order, incomplete)
+    assert config.output_path("femur") == Path(f"femur_{element_type}.msh")
+    assert config.output_path("lateral_meniscus") == Path("lateral_meniscus_hex8.msh")
+
+
+def test_bone_mesh_defaults_and_limits():
+    config = BoneMesh()
+
+    assert config.element_type == "tri3"
+    assert (config.element_size, config.cortical_element_size, config.cortical_distance, config.cancellous_grad, config.max_size) == (
+        2.0,
+        1.0,
+        3.0,
+        0.5,
+        4.0,
+    )
+    with pytest.raises(pydantic.ValidationError, match="must be at least cortical_element_size"):
+        BoneMesh(cortical_element_size=2.0, max_size=1.0)
+    for element_type in ("hex8", "tri10"):
+        with pytest.raises(pydantic.ValidationError):
+            BoneMesh.model_validate({"element_type": element_type})

@@ -11,6 +11,7 @@ from kneemesh.brep import BRep, contours_to_polydata
 from kneemesh.cartilage import CartilageSides, classify_sides
 from kneemesh.config import DEFAULT_CARTILAGE_ELEMENT_SIZE
 from kneemesh.disk import read_label_map
+from kneemesh.geo.bone import bone_mask, decimate_surface
 from kneemesh.geo.femur import fit_femoral_sheet
 from kneemesh.geo.meniscus import centerline, contours_to_brep, contours_to_hex_blocks, slice_isocontour
 from kneemesh.geo.sheet import CartilageSheet, fit_sheet, sheet_to_brep
@@ -31,6 +32,10 @@ CARTILAGE_SEMI_AXES = (15.0, 10.0)
 THIN_CENTER = (-6.0, 0.0)
 DEFECT_CENTER = (6.0, 0.0)
 DEFECT_RADIUS = 2.5
+
+SHAFT_RADIUS = 6.0
+SHAFT_LENGTH = 25.0
+CAVITY_RADIUS = 2.0
 
 FEMUR_RADIUS = 20.0
 FEMORAL_THICKNESS = 2.0
@@ -342,3 +347,43 @@ def real_femoral_sheet(real_femoral_sides: CartilageSides) -> CartilageSheet:
 def real_femoral_hex_solid(real_femoral_sheet: CartilageSheet) -> BRep:
     """The real femoral cartilage's solid at the defaults for hexahedra."""
     return sheet_to_brep(real_femoral_sheet)
+
+
+def bone_surface_of(label_map: sitk.Image, label: int = 1, shaft_cut_fraction: float = 0.0) -> vtkPolyData:
+    """A bone's decimated surface, made as the B-rep pipeline makes it."""
+    distance_field = signed_distance_field(bone_mask(label_map, label, shaft_cut_fraction), 1)
+    return decimate_surface(smooth_isocontour(extract_isocontour(distance_field), non_manifold_smoothing=False))
+
+
+@pytest.fixture(scope="session")
+def bone_label() -> sitk.Image:
+    """A synthetic bone (label 1), physical units mm: a shaft of radius SHAFT_RADIUS along x, cut off by the image at x = 0.
+
+    The shaft runs SHAFT_LENGTH from the image's edge to a hemispherical end,
+    and holds a spherical cavity of radius CAVITY_RADIUS at its middle.
+    """
+    spacing, origin, size = 0.5, (0.25, -8.75, -8.75), (66, 36, 36)
+    z, y, x = (
+        origin[axis] + spacing * np.arange(size[axis])[shape]
+        for axis, shape in ((2, np.s_[:, None, None]), (1, np.s_[None, :, None]), (0, np.s_[None, None, :]))
+    )
+    radial = y**2 + z**2
+    shaft = (radial <= SHAFT_RADIUS**2) & (x <= SHAFT_LENGTH)
+    end = radial + (x - SHAFT_LENGTH) ** 2 <= SHAFT_RADIUS**2
+    cavity = radial + (x - SHAFT_LENGTH / 2) ** 2 <= CAVITY_RADIUS**2
+    image = sitk.GetImageFromArray(((shaft | end) & ~cavity).astype(np.uint8))
+    image.SetSpacing((spacing,) * 3)
+    image.SetOrigin(origin)
+    return image
+
+
+@pytest.fixture(scope="session")
+def bone_surface(bone_label: sitk.Image) -> vtkPolyData:
+    """The closed surface of bone_label, its cavity filled."""
+    return bone_surface_of(bone_label)
+
+
+@pytest.fixture(scope="session")
+def real_patella_surface() -> vtkPolyData:
+    """The closed surface of the real patella."""
+    return bone_surface_of(read_label_map(Path(__file__).parent / "dat" / "patella.nii"))

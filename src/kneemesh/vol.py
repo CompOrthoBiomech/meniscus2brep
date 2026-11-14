@@ -124,12 +124,15 @@ def extract_isocontour(distance_field: sitk.Image, level: float = 0.0) -> vtkPol
 
 
 def smooth_isocontour(
-    mesh: vtkPolyData, iterations: int = DEFAULT_SMOOTHING_ITERATIONS, pass_band: float = DEFAULT_SMOOTHING_PASS_BAND
+    mesh: vtkPolyData,
+    iterations: int = DEFAULT_SMOOTHING_ITERATIONS,
+    pass_band: float = DEFAULT_SMOOTHING_PASS_BAND,
+    non_manifold_smoothing: bool = True,
 ) -> vtkPolyData:
     """Smooth a surface mesh with a windowed sinc filter, keeping its connectivity.
 
-    Boundary smoothing is off, so any open edges stay in place, and
-    non-manifold smoothing is on. Coordinates are normalized to the unit cube
+    Boundary and feature-edge smoothing are off, so any open edges stay in
+    place, and non-manifold smoothing is on unless turned off. Coordinates are normalized to the unit cube
     while filtering, so the result does not depend on the physical scale.
 
     Args:
@@ -139,6 +142,7 @@ def smooth_isocontour(
             closely. 0 returns the mesh unchanged.
         pass_band: Pass band of the filter, between 0 and 2. Lower values
             smooth more and shrink the surface more.
+        non_manifold_smoothing: Smooth vertices on non-manifold edges too.
 
     Returns:
         A new smoothed mesh, or mesh itself when iterations is 0.
@@ -159,7 +163,7 @@ def smooth_isocontour(
     smoother.SetPassBand(pass_band)
     smoother.BoundarySmoothingOff()
     smoother.FeatureEdgeSmoothingOff()
-    smoother.NonManifoldSmoothingOn()
+    smoother.SetNonManifoldSmoothing(non_manifold_smoothing)
     smoother.NormalizeCoordinatesOn()
     smoother.Update()
     logger.debug("Smoothed the surface with {} iterations and pass band {}", iterations, pass_band)

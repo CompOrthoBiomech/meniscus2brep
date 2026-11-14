@@ -12,14 +12,17 @@ import SimpleITK as sitk
 from loguru import logger
 from pydantic import ValidationError
 from pydantic.fields import FieldInfo
+from vtkmodules.vtkCommonDataModel import vtkPolyData
 
 from kneemesh.brep import BRep
 from kneemesh.cartilage import CartilageSides, classify_sides
 from kneemesh.config import BONES, BaseConfig, BrepMesh, CartilageBrep, CartilageMesh, LabelMapAssembly, LabelMapBrep, Structure, StructureMesh
-from kneemesh.disk import read_brep, read_label_map, segmentation_labels_path, write_brep, write_mesh, write_segmentation
+from kneemesh.disk import read_brep, read_label_map, read_surface, segmentation_labels_path, write_brep, write_mesh, write_segmentation, write_surface
+from kneemesh.geo.bone import bone_mask, decimate_surface
 from kneemesh.geo.femur import fit_femoral_sheet
 from kneemesh.geo.meniscus import centerline, contours_to_brep, contours_to_hex_blocks, slice_isocontour
 from kneemesh.geo.sheet import CartilageSheet, fit_sheet, sheet_to_brep
+from kneemesh.mesh import bone as bone_mesh
 from kneemesh.mesh import meniscus as meniscus_mesh
 from kneemesh.mesh import sheet as sheet_mesh
 from kneemesh.mesh_optimization import mesh_quality, optimize_hexahedral_mesh
@@ -27,75 +30,59 @@ from kneemesh.segmentation import Interpolator, Segmentation, assemble_label_map
 from kneemesh.tet_meshing import Mesh, tetrahedral_mesh
 from kneemesh.vol import extract_isocontour, signed_distance_field, smooth_isocontour
 
-type _BrepBuilder = Callable[[Segmentation, Structure, LabelMapBrep], BRep]
-type _Mesher = Callable[[BRep, BrepMesh, Structure], Mesh]
+type _BrepBuilder = Callable[[Segmentation, Structure, LabelMapBrep], BRep | vtkPolyData]
+type _Mesher = Callable[[Path, BrepMesh, Structure], Mesh]
 
 
-def run_brep(config: LabelMapBrep) -> dict[Structure, BRep]:
+def run_brep(config: LabelMapBrep) -> dict[Structure, BRep | vtkPolyData]:
     """Build a B-rep of every structure in config's segmentation and write each to config.output_path(structure).
 
-    Each structure's name picks its pipeline. A bone without a pipeline is
-    not built when it is named only as the bone under a cartilage, which
-    uses it to tell its sides apart. Every structure is checked before any
-    work starts, and each B-rep is written as soon as it is built.
+    Each structure's name picks its pipeline. A bone's geometry is its
+    triangulated surface rather than a B-rep. Each output is written as soon
+    as it is built.
 
     Returns:
-        The B-rep of each structure.
+        The B-rep of each structure, or the surface of each bone.
 
     Raises:
         ValueError: If config gives no segmentation, or it cannot be read or combined.
-        NotImplementedError: If a structure has no B-rep pipeline yet.
     """
     structures = config.structures
     if not structures:
         raise ValueError("Give a multilabel label_map with labels or single-label label_maps to read")
-    references = {BONES[structure] for structure in structures if structure in BONES}
-    builders: dict[Structure, _BrepBuilder | None] = {
-        structure: _BREP_BUILDERS.get(structure) for structure in structures if structure in _BREP_BUILDERS or structure not in references
-    }
-    missing = [structure for structure, builder in builders.items() if builder is None]
-    if missing:
-        raise NotImplementedError(f"B-rep generation is not implemented for {', '.join(missing)}")
-    for bone in sorted(references - set(builders)):
-        logger.info("Using {} only to orient its cartilage; bone B-reps are not implemented", bone)
     segmentation = load_segmentation(config)
-    breps: dict[Structure, BRep] = {}
-    for structure, builder in builders.items():
-        assert builder is not None
-        breps[structure] = builder(segmentation, structure, config)
+    breps: dict[Structure, BRep | vtkPolyData] = {}
+    for structure in structures:
+        geometry = _BREP_BUILDERS[structure](segmentation, structure, config)
         path = config.output_path(structure)
         path.parent.mkdir(parents=True, exist_ok=True)
-        write_brep(breps[structure], path)
+        if isinstance(geometry, BRep):
+            write_brep(geometry, path)
+        else:
+            write_surface(geometry, path)
         logger.info("Wrote {}", path)
+        breps[structure] = geometry
     return breps
 
 
 def run_mesh(config: BrepMesh) -> dict[Structure, Mesh]:
-    """Mesh the B-rep of every structure in config.breps and write each to config.output_path(structure).
+    """Mesh the B-rep of every structure in config.breps, or a bone's surface, and write each to config.output_path(structure).
 
-    Each structure's name picks its pipeline. Every structure is checked
-    before any work starts, and each mesh is written as soon as it is made.
+    Each structure's name picks its pipeline, and each mesh is written as soon as it is made.
 
     Returns:
         The mesh of each structure.
 
     Raises:
-        ValueError: If config gives no breps.
-        OSError: If a B-rep cannot be read.
-        NotImplementedError: If a structure has no meshing pipeline yet.
+        ValueError: If config gives no breps, or a file is not a B-rep or surface.
+        OSError: If a file cannot be read.
     """
     if not config.breps:
         raise ValueError("Give the breps to mesh, by structure")
-    meshers: dict[Structure, _Mesher | None] = {structure: _MESHERS.get(structure) for structure in config.breps}
-    missing = [structure for structure, mesher in meshers.items() if mesher is None]
-    if missing:
-        raise NotImplementedError(f"Meshing is not implemented for {', '.join(missing)}")
     meshes: dict[Structure, Mesh] = {}
     for structure, path in config.breps.items():
-        mesher = meshers[structure]
-        assert mesher is not None
-        logger.info("Reading B-rep {} for {}", path, structure)
-        mesh = mesher(read_brep(path), config, structure)
+        logger.info("Reading {} for {}", path, structure)
+        mesh = _MESHERS[structure](path, config, structure)
         counts = ", ".join(f"{len(connectivity)} {name}" for name, connectivity in mesh.elements.items())
         logger.info("Meshed {} with {} nodes and {}", structure, len(mesh.nodes), counts)
         output = config.output_path(structure)
@@ -216,7 +203,56 @@ def _femoral_cartilage_brep(segmentation: Segmentation, structure: Structure, br
     return sheet_to_brep(sheet)
 
 
-def _meniscus_mesh(brep: BRep, mesh_config: BrepMesh, _structure: Structure) -> Mesh:
+def _bone_surface(segmentation: Segmentation, structure: Structure, brep_config: LabelMapBrep) -> vtkPolyData:
+    config = brep_config.bone
+    label = segmentation.value(structure)
+    logger.info("Filling cavities of {} (label {}) and cutting off {} of each shaft", structure, label, config.shaft_cut_fraction)
+    mask = bone_mask(segmentation.image, label, config.shaft_cut_fraction)
+    logger.info("Computing the signed distance field")
+    distance_field = signed_distance_field(mask, 1, config.sigma)
+    logger.info("Extracting the surface at level {}", config.level)
+    surface = extract_isocontour(distance_field, config.level)
+    logger.info("Smoothing the surface with {} iterations and pass band {}", config.smoothing_iterations, config.smoothing_pass_band)
+    surface = smooth_isocontour(surface, config.smoothing_iterations, config.smoothing_pass_band, non_manifold_smoothing=False)
+    logger.info("Decimating the surface to triangles of size {}", config.triangle_size)
+    return decimate_surface(surface, config.triangle_size)
+
+
+def _bone_mesh(path: Path, mesh_config: BrepMesh, _structure: Structure) -> Mesh:
+    config = mesh_config.bone
+    surface = read_surface(path)
+    if config.element_shape == "tetrahedral":
+        logger.info(
+            "Meshing with {} elements of size {} within {} of the surface, growing by {} per unit of depth up to {}",
+            config.element_type,
+            config.cortical_element_size,
+            config.cortical_distance,
+            config.cancellous_grad,
+            config.max_size,
+        )
+        return bone_mesh.tetrahedral_mesh(
+            surface,
+            config.cortical_element_size,
+            config.cortical_distance,
+            config.cancellous_grad,
+            config.max_size,
+            config.element_order,
+            config.algorithm_2d,
+            config.algorithm_3d,
+        )
+    logger.info("Meshing the surface with {} elements of size {}", config.element_type, config.element_size)
+    return bone_mesh.surface_mesh(
+        surface,
+        config.element_size,
+        config.element_order,
+        config.second_order_incomplete,
+        config.element_shape == "quadrilateral",
+        config.algorithm_2d,
+    )
+
+
+def _meniscus_mesh(path: Path, mesh_config: BrepMesh, _structure: Structure) -> Mesh:
+    brep = read_brep(path)
     config = mesh_config.meniscus
     logger.info("Meshing with {} elements", mesh_config.element_type)
     if mesh_config.element_shape == "hexahedral":
@@ -227,7 +263,8 @@ def _meniscus_mesh(brep: BRep, mesh_config: BrepMesh, _structure: Structure) -> 
     return _tetrahedral_mesh(brep, config, mesh_config)
 
 
-def _cartilage_mesh(brep: BRep, mesh_config: BrepMesh, structure: Structure) -> Mesh:
+def _cartilage_mesh(path: Path, mesh_config: BrepMesh, structure: Structure) -> Mesh:
+    brep = read_brep(path)
     config = mesh_config.cartilage
     logger.info("Meshing with {} elements", mesh_config.element_type)
     if mesh_config.element_shape == "hexahedral":
@@ -235,7 +272,8 @@ def _cartilage_mesh(brep: BRep, mesh_config: BrepMesh, structure: Structure) -> 
     return _tetrahedral_mesh(brep, config, mesh_config)
 
 
-def _femoral_cartilage_mesh(brep: BRep, mesh_config: BrepMesh, structure: Structure) -> Mesh:
+def _femoral_cartilage_mesh(path: Path, mesh_config: BrepMesh, structure: Structure) -> Mesh:
+    brep = read_brep(path)
     config = mesh_config.femoral_cartilage
     logger.info("Meshing with {} elements", mesh_config.element_type)
     if mesh_config.element_shape == "hexahedral":
@@ -318,6 +356,9 @@ _BREP_BUILDERS: dict[Structure, _BrepBuilder] = {
     "medial_tibial_cartilage": _cartilage_brep,
     "patellar_cartilage": _cartilage_brep,
     "femoral_cartilage": _femoral_cartilage_brep,
+    "femur": _bone_surface,
+    "tibia": _bone_surface,
+    "patella": _bone_surface,
 }
 
 # The pipeline that meshes each implemented structure's B-rep.
@@ -328,6 +369,9 @@ _MESHERS: dict[Structure, _Mesher] = {
     "medial_tibial_cartilage": _cartilage_mesh,
     "patellar_cartilage": _cartilage_mesh,
     "femoral_cartilage": _femoral_cartilage_mesh,
+    "femur": _bone_mesh,
+    "tibia": _bone_mesh,
+    "patella": _bone_mesh,
 }
 
 
@@ -479,7 +523,7 @@ def _run[ConfigType: BaseConfig](step: Callable[[], object], setup: Configuratio
         logger.debug("Configuration: {}", setup.config.model_dump_json())
         try:
             step()
-        except (ValueError, OSError, NotImplementedError) as error:
+        except (ValueError, OSError) as error:
             logger.error("{}", error)
             return 1
         except Exception:

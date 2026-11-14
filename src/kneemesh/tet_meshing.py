@@ -75,12 +75,12 @@ _SURFACE_SAMPLES = 30
 
 @dataclass(frozen=True, eq=False)
 class Mesh:
-    """A volume mesh.
+    """A mesh of volume elements, or of surface elements for a bone's surface.
 
     Attributes:
         nodes: (N, 3) physical node coordinates.
         elements: Connectivity keyed by gmsh element name, such as
-            "Tetrahedron 4" or "Hexahedron 27". Each array is (M, nodes per
+            "Tetrahedron 4", "Hexahedron 27", or "Triangle 6". Each array is (M, nodes per
             element) of 0-based indices into nodes, in gmsh's node ordering.
         element_types: gmsh's element type number for each key of elements.
         straight_lines: (L, K) indices into nodes of chains of corner nodes
@@ -171,7 +171,7 @@ def tetrahedral_mesh(
             except Exception as error:
                 # gmsh reports every failure as a bare Exception.
                 raise ValueError(f"gmsh could not mesh the solid with {sizes}: {error}") from error
-        mesh = volume_mesh()
+        mesh = gmsh_mesh()
     if not mesh.elements:
         raise ValueError(f"gmsh produced no tetrahedra with {sizes}")
     return mesh
@@ -235,20 +235,27 @@ def oriented_extents() -> np.ndarray:
     return np.sort(np.ptp(offsets @ axes, axis=0))
 
 
-def volume_mesh() -> Mesh:
-    """Return the current gmsh model's 3D elements and nodes as a Mesh."""
+def gmsh_mesh(dimension: int = 3) -> Mesh:
+    """Return the current gmsh model's elements of a dimension, 3 for volume elements or 2 for surface ones, and their nodes as a Mesh."""
     node_tags, coordinates, _ = gmsh.model.mesh.getNodes()
-    coordinates = np.array(coordinates)
+    coordinates = np.array(coordinates).reshape(-1, 3)
     node_tags = np.array(node_tags)
 
     index = np.zeros(int(node_tags.max()) + 1, dtype=np.int64)
     index[node_tags] = np.arange(len(node_tags))
 
     elements, element_types = {}, {}
-    for element_type in gmsh.model.mesh.getElementTypes(3):
+    for element_type in gmsh.model.mesh.getElementTypes(dimension):
         name, _, _, nodes_per_element, *_ = gmsh.model.mesh.getElementProperties(element_type)
         _, element_nodes = gmsh.model.mesh.getElementsByType(element_type)
         elements[name] = index[element_nodes].reshape(-1, nodes_per_element)
         element_types[name] = int(element_type)
-    logger.debug("gmsh mesh has {} nodes and {}", len(node_tags), {name: len(connectivity) for name, connectivity in elements.items()})
-    return Mesh(coordinates.reshape(-1, 3), elements, element_types)
+    # Keep only the nodes the elements use, such as a surface mesh's without the model's other nodes.
+    used = np.unique(np.concatenate([connectivity.ravel() for connectivity in elements.values()])) if elements else np.zeros(0, np.int64)
+    if len(used) < len(coordinates):
+        renumber = np.zeros(len(coordinates), dtype=np.int64)
+        renumber[used] = np.arange(len(used))
+        elements = {name: renumber[connectivity] for name, connectivity in elements.items()}
+        coordinates = coordinates[used]
+    logger.debug("gmsh mesh has {} nodes and {}", len(coordinates), {name: len(connectivity) for name, connectivity in elements.items()})
+    return Mesh(coordinates, elements, element_types)
