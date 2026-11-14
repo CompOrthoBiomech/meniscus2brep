@@ -195,6 +195,8 @@ def _smooth(locator: vtkImplicitPolyDataDistance) -> None:
     gmsh smooths within each patch but keeps the nodes on the seams between
     patches, which left a quadrilateral of scaled Jacobian 0.04 there on the
     real femur. The seams are not edges of the bone, so the nodes on them move too.
+    A gmsh compound of the patches cannot do this: a compound must map to a
+    disk, and the closed surface has no boundary.
     """
     node_tags, coordinates, _ = gmsh.model.mesh.getNodes()
     index = np.zeros(int(np.max(node_tags)) + 1, dtype=np.int64)

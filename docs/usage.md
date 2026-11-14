@@ -42,6 +42,14 @@ Every structure in the segmentation is built. A cartilage needs the bone beneath
 }
 ```
 
+The repository's `examples/` holds configurations for the real structures in `tests/dat`, run from the repository root. The `knee_*` ones handle all nine structures in one go:
+
+```sh
+kneemesh-assemble --config examples/knee_assemble.json   # writes examples/knee.nrrd
+kneemesh-brep --config examples/knee_brep_hex.json       # or knee_brep_tet.json
+kneemesh-mesh --config examples/knee_mesh_hex8.json      # or knee_mesh_tet4.json
+```
+
 ## Cartilage
 
 The tibial and patellar cartilage are built as sheets between their articular side and the side against their bone. Each B-rep is one solid: the two sides, and a straight wall around the perimeter, tilted so it meets the two sides at about equal angles, where a wall along the sheet's normal met the articular side, which curves down at the rim, at up to 130 degrees or more. Either element shape can mesh it, but the `cartilage` settings pick defaults by `hex_blocks`. For hexahedra, the perimeter curves no more tightly than a 3 mm radius, so elements can follow the real lateral tibial cartilage's notch, and regions thinner than 0.2 of the mean thickness are thickened by lowering the bone side. For tetrahedra, the perimeter follows the label more closely, with a 1 mm radius, regions thinner than 0.1 of the mean are thickened, and those thinner than 0.05 of the mean, or missing from the label, become holes. Thickened cartilage may overlap its bone.

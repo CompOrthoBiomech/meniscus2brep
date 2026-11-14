@@ -10,5 +10,8 @@
   },
   "assembled_label_map": "examples/cartilage.nrrd",
   "output": "_tet.brep",
-  "output_directory": "examples"
+  "output_directory": "examples",
+  "bone": {
+    "shaft_cut_fraction": 0.6
+  }
 }

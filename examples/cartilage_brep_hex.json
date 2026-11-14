@@ -16,5 +16,8 @@
   },
   "femoral_cartilage": {
     "hex_blocks": true
+  },
+  "bone": {
+    "shaft_cut_fraction": 0.6
   }
 }

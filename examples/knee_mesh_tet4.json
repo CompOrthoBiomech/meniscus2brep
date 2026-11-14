@@ -1,0 +1,30 @@
+{
+  "breps": {
+    "femur": "examples/femur.stl",
+    "tibia": "examples/tibia.stl",
+    "patella": "examples/patella.stl",
+    "lateral_meniscus": "examples/lateral_meniscus_tet.brep",
+    "medial_meniscus": "examples/medial_meniscus_tet.brep",
+    "lateral_tibial_cartilage": "examples/lateral_tibial_cartilage_tet.brep",
+    "medial_tibial_cartilage": "examples/medial_tibial_cartilage_tet.brep",
+    "patellar_cartilage": "examples/patellar_cartilage_tet.brep",
+    "femoral_cartilage": "examples/femoral_cartilage_tet.brep"
+  },
+  "element_type": "tet4",
+  "output": "_{element_type}.vtk",
+  "output_directory": "examples",
+  "meniscus": {
+    "max_size": 1.0,
+    "elements_per_circle": 8
+  },
+  "cartilage": {
+    "max_size": 1.0
+  },
+  "bone": {
+    "element_type": "tet4",
+    "cortical_element_size": 2.0,
+    "cortical_distance": 4.0,
+    "cancellous_grad": 0.5,
+    "max_size": 5.0
+  }
+}

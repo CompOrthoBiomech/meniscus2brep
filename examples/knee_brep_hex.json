@@ -1,0 +1,29 @@
+{
+  "label_map": "examples/knee.nrrd",
+  "labels": {
+    "femur": 1,
+    "tibia": 2,
+    "patella": 3,
+    "lateral_meniscus": 4,
+    "medial_meniscus": 5,
+    "lateral_tibial_cartilage": 6,
+    "medial_tibial_cartilage": 7,
+    "patellar_cartilage": 8,
+    "femoral_cartilage": 9
+  },
+  "output": "_hex.brep",
+  "output_directory": "examples",
+  "meniscus": {
+    "points_per_slice": 10,
+    "hex_blocks": true
+  },
+  "cartilage": {
+    "hex_blocks": true
+  },
+  "femoral_cartilage": {
+    "hex_blocks": true
+  },
+  "bone": {
+    "shaft_cut_fraction": 0.6
+  }
+}

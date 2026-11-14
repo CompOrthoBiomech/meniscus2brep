@@ -1,0 +1,15 @@
+{
+  "label_maps": {
+    "femur": "tests/dat/femur.nii",
+    "tibia": "tests/dat/tibia.nii",
+    "patella": "tests/dat/patella.nii",
+    "lateral_meniscus": "tests/dat/lateral_meniscus.nii",
+    "medial_meniscus": "tests/dat/medial_meniscus.nii",
+    "lateral_tibial_cartilage": "tests/dat/lateral_tibial_cartilage.nii",
+    "medial_tibial_cartilage": "tests/dat/medial_tibial_cartilage.nii",
+    "patellar_cartilage": "tests/dat/patellar_cartilage.nii",
+    "femoral_cartilage": "tests/dat/femoral_cartilage.nii"
+  },
+  "interpolator": "nearest_neighbor",
+  "output": "examples/knee.nrrd"
+}

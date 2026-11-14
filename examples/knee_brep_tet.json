@@ -1,0 +1,19 @@
+{
+  "label_map": "examples/knee.nrrd",
+  "labels": {
+    "femur": 1,
+    "tibia": 2,
+    "patella": 3,
+    "lateral_meniscus": 4,
+    "medial_meniscus": 5,
+    "lateral_tibial_cartilage": 6,
+    "medial_tibial_cartilage": 7,
+    "patellar_cartilage": 8,
+    "femoral_cartilage": 9
+  },
+  "output": "_tet.brep",
+  "output_directory": "examples",
+  "bone": {
+    "shaft_cut_fraction": 0.6
+  }
+}

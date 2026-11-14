@@ -8,9 +8,9 @@
   "output_directory": "examples",
   "bone": {
     "element_type": "tet4",
-    "cortical_element_size": 1.0,
-    "cortical_distance": 3.0,
+    "cortical_element_size": 2.0,
+    "cortical_distance": 4.0,
     "cancellous_grad": 0.5,
-    "max_size": 4.0
+    "max_size": 5.0
   }
 }

@@ -13,10 +13,13 @@ from kneemesh.config import (
     CartilageMesh,
     FemoralCartilageBrep,
     FemoralCartilageMesh,
+    LabelMapAssembly,
     LabelMapBrep,
     MeniscusBrep,
     MeniscusMesh,
 )
+
+EXAMPLES = Path(__file__).parent.parent / "examples"
 
 
 class ExampleConfig(BaseConfig):
@@ -292,3 +295,10 @@ def test_bone_mesh_defaults_and_limits():
     for element_type in ("hex8", "tri10"):
         with pytest.raises(pydantic.ValidationError):
             BoneMesh.model_validate({"element_type": element_type})
+
+
+# kneemesh-assemble writes <stem>_labels.json beside its output, untracked.
+@pytest.mark.parametrize("path", sorted(path for path in EXAMPLES.glob("*.json") if not path.stem.endswith("_labels")), ids=lambda path: path.stem)
+def test_example_configurations_are_valid(path):
+    model = LabelMapAssembly if path.stem.endswith("_assemble") else LabelMapBrep if "_brep" in path.stem else BrepMesh
+    assert isinstance(model.from_json(path), model)
